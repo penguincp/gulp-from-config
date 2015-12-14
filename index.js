@@ -5,13 +5,12 @@
  */
 
 // Root path
-var rootPath = process.cwd(),
+var pwdPath = process.cwd(),
 
 // Npm modules
     path = require('path'),
     glob = require('glob'),
-    browserify = require('browserify'),
-    watchify = require('watchify'),
+	browserify = require('browserify'),
     fileExists = require('file-exists'),
     source = require('vinyl-source-stream'),
     buffer = require('vinyl-buffer'),
@@ -35,7 +34,7 @@ var createTasks = function createTasks(gulpInstance) {
         mainConfig = this.__config,
 
     // Path og config files
-        configsPath = mainConfig ? mainConfig.paths.config : path.join(rootPath, 'configs');
+        configsPath = mainConfig ? mainConfig.paths.config : path.join(pwdPath, 'configs');
 
     /**
      * Create gulp tasks
@@ -53,10 +52,10 @@ var createTasks = function createTasks(gulpInstance) {
             var taskName = config.name;
 
             if(taskName) {
-
                 subTasks = createTask.call(this, config);
 
-                gulp.task(taskName, subTasks, function(){});
+                gulp.task(taskName, subTasks, function () {
+                });
 
                 tasks.push(taskName);
 
@@ -101,7 +100,7 @@ var createTasks = function createTasks(gulpInstance) {
                         subTasks.push(subTaskWatch);
                     }
 
-                    createSubTask.call(this, subTaskName, subTask, config.name);
+                    createSubTask.call(this, subTaskName, subTask, config);
                 }
             }.bind(this));
         } else {
@@ -122,8 +121,7 @@ var createTasks = function createTasks(gulpInstance) {
 
         if (Object.keys(task.src).length &&
             Array.isArray(task.src.include) &&
-            task.src.include.length &&
-            typeof task.dest === 'string') {
+            typeof(task.dest) === 'string') {
 
             return true;
         } else {
@@ -142,49 +140,49 @@ var createTasks = function createTasks(gulpInstance) {
      * @param {string} subTaskName
      * @param {Object} subTask
      */
-    function createSubTask(subTaskName, subTask, taskName) {
+    function createSubTask(subTaskName, subTask, config) {
 
         var taskCompletion = this.__taskCompletion;
 
         gulp.task(subTaskName, function (taskCompletion) {
+                try {
+                    var task = {},
+                        dest =  subTask.dest;
 
-            var task = {},
-                dest = rootPath + subTask.dest;
+                    if (subTask.browserify) {
+                        task = setBrowserify(subTask.src, subTask.browserify, config.name, subTask);
+                    } else {
+                        task = setSrc(subTask.src, subTask);
+                    }
 
-            if(subTask.browserify) {
-                task = setBrowserify(subTask.src, subTask, taskName, dest);
-                task = runWatchifyTask(subTask, taskName, task, dest);
-            } else {
-                task = setSrc(subTask.src);
+                    task = setPipes(task, subTask);
 
-                task = setPipes(task, subTask.plugins, subTask.sourcemaps);
+                    task = task.pipe(gulp.dest(dest));
 
-                task = task.pipe(gulp.dest(dest));
-            }
+                    taskCompletion(null, config.configFile);
 
-
-            if(taskCompletion) {
-                taskCompletion(subTask);
-            }
-
-            return task;
-        }.bind(this, taskCompletion));
+                    return task;
+                }catch(err){
+                    taskCompletion(err, config.configFile);
+                }
+            }.bind(this, taskCompletion)
+        );
     }
 
-    /**
+	/**
      * Prepare source patshs
      * @access private
      * @param {Object} srcPaths
      * @returns Array
-     */
-    function prepareSrc(srcPaths) {
+	 */
+	function prepareSrc(srcPaths, subTask) {
 
         var src = [],
             include = [];
 
         if(Object.keys(srcPaths).length) {
 
-            include = setFullPaths(srcPaths.include);
+            include = setFullPaths(srcPaths.include, subTask);
 
             src = src.concat(include);
 
@@ -192,7 +190,7 @@ var createTasks = function createTasks(gulpInstance) {
 
                 srcPaths.exclude.forEach(function (path) {
 
-                    src.push('!' + rootPath + path);
+                    src.push('!' + pwdPath + path);
                 });
             }
         }
@@ -202,17 +200,17 @@ var createTasks = function createTasks(gulpInstance) {
             gutil.log('Src path' + i + ':', gutil.colors.magenta(srcPath));
         });
 
-        return src;
-    }
+		return src;
+	}
 
     /**
-     * Cut rootPath from path
+     * Cut pwdPath from path
      * @access private
      * @param {string} path
      * @returns {string} path
      */
     function minimizePath(path) {
-        return path.replace(rootPath, '.');
+        return path.replace(pwdPath, '.');
     }
 
     /**
@@ -221,9 +219,9 @@ var createTasks = function createTasks(gulpInstance) {
      * @param {Object} srcPaths
      * @returns {*}
      */
-    function setSrc(srcPaths) {
+    function setSrc(srcPaths, subTask) {
 
-        var src = prepareSrc(srcPaths);
+        var src = prepareSrc(srcPaths, subTask);
 
         return gulp.src(src);
     }
@@ -236,13 +234,14 @@ var createTasks = function createTasks(gulpInstance) {
      * @param {string} taskName
      * @returns {*}
      */
-    function setBrowserify(srcPaths, subTask, taskName, dest) {
+	function setBrowserify(srcPaths, browserifyConfig, taskName, subTask) {
 
-        var src = prepareSrc(srcPaths),
+		var src = prepareSrc(srcPaths, subTask),
+            file = browserifyConfig.file || taskName + '.js',
             entries = [],
             b = null;
 
-        if(src.length) {
+		if(src.length) {
 
             gutil.log('Browserify enabled:', gutil.colors.blue(true));
 
@@ -250,138 +249,65 @@ var createTasks = function createTasks(gulpInstance) {
                 entries = entries.concat(glob.sync(e));
             });
 
-            var opt = {
+            b = browserify({
                 entries: entries,
-                debug: true,
-                cache: {},
-                packageCache: {},
-                fullPaths: true
-            };
+                debug: true
+            });
 
-            b = browserify(opt);
-            b = setTransforms(b, subTask.browserify.transforms);
+			b = setTransforms(b, browserifyConfig.transform);
+			b = b.bundle();
+			b = b.pipe(source(file));
+			b = b.pipe(buffer());
+		}
 
-            if(subTask.browserify.watchify) {
+		return b;
+	}
 
-                gutil.log('Watchify enabled:', gutil.colors.blue(true));
-
-                b = b.plugin(watchify);
-                b = b.on('update', function(file) {
-
-                    gutil.log('File:', gutil.colors.magenta(file), 'was', gutil.colors.green('changed'));
-                    return runWatchifyTask(subTask, taskName, b, dest);
-
-                }.bind(this));
-
-                b = b.on('log', function(msg) {
-
-                    gutil.log('Watchify:', gutil.colors.green(msg));
-                });
-
-                b = b.on('error', function(err) {
-
-                    gutil.log(gutil.colors.red('Error:'), 'Browserify:', err.message);
-                });
-            }
-        }
-
-        return b;
-    }
-
-    function runWatchifyTask(subTask, taskName, b, dest) {
-
-        var file = subTask.browserify.file || taskName + '.js';
-
-        b = b.bundle();
-        b = b.on('error', function(err) {
-
-            gutil.log(gutil.colors.red('Error:'), 'Wathify:', err.message);
-        });
-        b = b.pipe(source(file));
-        b = b.pipe(buffer());
-
-        b = setPipes(b, subTask.plugins, subTask.sourcemaps);
-
-        b = b.pipe(gulp.dest(dest));
-
-        return b;
-    }
-
-    /**
+	/**
      * Set browserify transforms
      * @access private
      * @param {Object} b
-     * @param {Array} transforms
+     * @param {Array} transform
      * @returns {*}
      */
-    function setTransforms(b, transforms) {
+	function setTransforms(b, transforms) {
 
-        var transforms = requireTransforms(transforms);
+        var transform = requireTransforms(transforms);
 
-        if(transforms.length) {
+        if(transform.length) {
 
-            //b = b.transform(transforms);
-            transforms.forEach(function (transform) {
-
-                b = b.transform(transform);
-            });
+            b = b.transform(transform);
         }
 
-        return b;
-    }
+		return b;
+	}
 
     /**
      * Require transform modules
-     * @param transforms
+     * @param transform
      * @returns {Array}
      */
-    function requireTransforms(transforms) {
+    function requireTransforms(transform) {
 
-        var transfomsList = [];
+        var transfoms = [];
 
-        if(Array.isArray(transforms) && transforms.length) {
+        if(Array.isArray(transform) && transform.length) {
 
-            transforms.forEach(function(t) {
-
-                var plugin = null,
-                    transformName = t,
-                    transformation = null,
-                    optionsMsg = gutil.colors.yellow('no options');
+            transform.forEach(function(t) {
 
                 try {
-
-                    if(typeof t.name === 'string') {
-
-                        transformName = t.name;
-                    }
-
-                    plugin = require(transformName);
-
-                    transformation = plugin;
-
-                    if(t.options && Object.keys(t.options).length) {
-
-                        optionsMsg = t.options;
-                        transformation = [plugin, t.options];
-                    }
-
-                    gutil.log('Transform:',  gutil.colors.green(transformName), 'with options:', optionsMsg);
-
-                    transfomsList.push(transformation);
+                    var trans = require(t);
+                    gutil.log('Transform:',  gutil.colors.green(t));
+                    transfoms.push(trans);
                 } catch (err) {
-
                     if (err.code === 'MODULE_NOT_FOUND') {
-
                         gutil.log(gutil.colors.red('Error:'), 'Transform does not exist', gutil.colors.green(t));
-                    } else {
-
-                        gutil.log(gutil.colors.red('Error:'), err.message);
                     }
                 }
             });
         }
 
-        return transfomsList;
+        return transfoms;
     }
 
     /**
@@ -408,7 +334,7 @@ var createTasks = function createTasks(gulpInstance) {
             task = gulp.watch(watch, [subTaskName])
 
                 .on('change', function(event) {
-                    gutil.log('File:', gutil.colors.magenta(event.path), 'was', gutil.colors.green(event.type));
+                    gutil.log('File: ' + gutil.colors.magenta(event.path) + ' was ' + gutil.colors.green(event.type));
                 });
 
             return task;
@@ -430,15 +356,12 @@ var createTasks = function createTasks(gulpInstance) {
         if(Array.isArray(subTask.watch) && subTask.watch.length) {
 
             watch = watch.concat(setFullPaths(subTask.watch));
-        } else if(subTask.watch === true) {
+        } else {
 
             include = setFullPaths(subTask.src.include);
             exclude = setFullPaths(subTask.src.exclude);
 
             watch = watch.concat(include, exclude);
-        } else {
-
-
         }
 
         return watch;
@@ -450,16 +373,15 @@ var createTasks = function createTasks(gulpInstance) {
      * @param {Array} src
      * @returns {Array}
      */
-    function setFullPaths(src) {
+    function setFullPaths(src, subTask) {
 
         var paths = [];
-
 
         if(src instanceof Array) {
 
             src.forEach(function (path) {
-
-                paths.push(rootPath + path);
+                var srcFullPath=(subTask.root || pwdPath) + path;
+                paths.push(srcFullPath);
             });
         }
 
@@ -474,7 +396,9 @@ var createTasks = function createTasks(gulpInstance) {
      * @param {Array} plugins
      * @returns {*}
      */
-    function setPipes(task, plugins, sourcemaps) {
+    function setPipes(task, subTask) {
+
+        var plugins= subTask.plugins, sourcemaps=subTask.sourcemaps;
 
         if(Object.keys(task).length) {
 
@@ -482,7 +406,7 @@ var createTasks = function createTasks(gulpInstance) {
 
                 gutil.log('Sourcemap enabled:', gutil.colors.blue(sourcemaps));
 
-                task = setSourceMaps(task, sourcemaps, plugins, setPlugins);
+                task = setSourceMaps(task, subTask, setPlugins);
             } else {
                 gutil.log(gutil.colors.yellow('Warning:'), 'no plugins');
             }
@@ -500,22 +424,24 @@ var createTasks = function createTasks(gulpInstance) {
      * @param {Function} setPlugins - callback for plugins
      * @returns {*}
      */
-    function setSourceMaps(task, sourcemaps, plugins, setPlugins) {
+    function setSourceMaps(task, subTask, setPlugins) {
 
-        var pipe = null;
+        var plugins= subTask.plugins, sourcemaps=subTask.sourcemaps;
+
+        var sourceMapPlugin = null;
 
         if(sourcemaps) {
-            pipe = pluginExist('gulp-sourcemaps');
+            sourceMapPlugin = pluginExist('gulp-sourcemaps');
         }
 
-        if(pipe) {
-            task = task.pipe(pipe.init({loadMaps: true}));
+        if(sourceMapPlugin) {
+            task = task.pipe(sourceMapPlugin.init({loadMaps: true}));
         }
 
-        task = setPlugins(task, plugins);
+        task = setPlugins(task, subTask, plugins);
 
-        if(pipe) {
-            task = task.pipe(pipe.write('./maps'));
+        if(sourceMapPlugin) {
+            task = task.pipe(sourceMapPlugin.write('./maps'));
         }
 
         return task;
@@ -528,14 +454,22 @@ var createTasks = function createTasks(gulpInstance) {
      * @param {Array} plugins
      * @returns {*}
      */
-    function setPlugins(task, plugins) {
+    function setPlugins(task, subTask, plugins) {
 
         plugins.forEach(function (plugin) {
 
-            var pipe = pluginExist(plugin.name, plugin.options);
+            var pluginModule = pluginExist(plugin.name, plugin.options);
 
-            if(pipe) {
-                task = task.pipe(pipe(plugin.options));
+            if(pluginModule) {
+                var pluginMethod=pluginModule;
+                if(plugin.method){
+                    pluginMethod=pluginModule[plugin.method];
+                }
+                task = task.pipe(pluginMethod.apply(null,  [].concat(plugin.options)));
+
+                if(plugin.dest && plugin.dest.toLowerCase()){
+                    task = task.pipe(gulp.dest(subTask.dest));
+                }
             }
         });
 
@@ -589,6 +523,7 @@ var createTasks = function createTasks(gulpInstance) {
             files.forEach(function(file) {
 
                 var config = getConfigFromFile(file);
+                config.configFile=file;
                 configs.push(config);
             });
         }
@@ -620,6 +555,9 @@ var createTasks = function createTasks(gulpInstance) {
     function getConfigFiles() {
 
         var configs = glob.sync(configsPath + '/*.json');
+        if(configs.length===0){
+            gutil.log(gutil.colors.red('Warning:'), 'no json config files find under '+configsPath);
+        }
         return configs;
     }
 
@@ -649,7 +587,7 @@ var setConfigsPath = function setConfigsPath(configsPath) {
 
     this.__config = {
         paths: {
-            config: path.join(rootPath, configsPath)
+            config: configsPath
         }
     };
     return true;
